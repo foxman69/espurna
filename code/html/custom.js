@@ -245,11 +245,11 @@ function addValue(data, name, value) {
     var is_group = [
         "ssid", "pass", "gw", "mask", "ip", "dns",
         "schEnabled", "schSwitch","schAction","schType","schHour","schMinute","schWDs","schUTC",
-        "relayBoot", "relayPulse", "relayTime",
+        "relayBoot", "relayPulse", "relayTime", "relayNickname",
         "mqttGroup", "mqttGroupSync", "relayOnDisc",
         "dczRelayIdx", "dczMagnitude",
         "tspkRelay", "tspkMagnitude",
-        "ledMode", "ledRelay",
+        "ledMode",
         "adminPass",
         "node", "key", "topic"
     ];
@@ -363,65 +363,6 @@ function getJson(str) {
         return false;
     }
 }
-
-<!-- removeIf(!thermostat)-->
-function checkTempRangeMin() {
-    var min = parseInt($("#tempRangeMinInput").val(), 10);
-    var max = parseInt($("#tempRangeMaxInput").val(), 10);
-    if (min > max - 1) {
-        $("#tempRangeMinInput").val(max - 1);
-    }
-}
-  
-function checkTempRangeMax() {
-    var min = parseInt($("#tempRangeMinInput").val(), 10);
-    var max = parseInt($("#tempRangeMaxInput").val(), 10);
-    if (max < min + 1) {
-        $("#tempRangeMaxInput").val(min + 1);
-    }
-}
-
-function doResetThermostatCounters(ask) {
-    var question = (typeof ask === "undefined" || false === ask) ?
-        null :
-        "Are you sure you want to reset burning counters?";
-    return doAction(question, "thermostat_reset_counters");
-}
-<!-- endRemoveIf(!thermostat)-->
-
-function initGPIO(node, name, key, value) {
-
-    var template = $("#gpioConfigTemplate").children();
-    var line = $(template).clone();
-    $("span.id", line).html(value);
-    $("select", line).attr("name", key);
-    line.appendTo(node);
-
-}
-
-function initSelectGPIO(select) {
-    // TODO: cross-check used GPIOs
-    // TODO: support 9 & 10 with esp8285 variant
-    var mapping = [
-        [153, "NONE"],
-        [0, "0"],
-        [1, "1 (U0TXD)"],
-        [2, "2 (U1TXD)"],
-        [3, "3 (U0RXD)"],
-        [4, "4"],
-        [5, "5"],
-        [12, "12 (MTDI)"],
-        [13, "13 (MTCK)"],
-        [14, "14 (MTMS)"],
-        [15, "15 (MTDO)"],
-    ];
-    for (n in mapping) {
-        var elem = $('<option value="' + mapping[n][0] + '">');
-        elem.html(mapping[n][1]);
-        elem.appendTo(select);
-    }
-}
-
 
 // -----------------------------------------------------------------------------
 // Actions
@@ -916,6 +857,42 @@ function moreSchedule() {
     $("div.more", parent).toggle();
 }
 
+function fixSchedule()
+{
+	var forms = $(".form-settings");
+	switches = $("select[name='schSwitch']",forms);
+	nicks =$("input[name='relayNickname']",forms);
+	for (var i=0;i<switches.length;i++)
+	{
+		tmp_switch = $(switches[i]).find("option");
+		for(var j=0;j<nicks.length;j++)
+		{
+			tmp_switch[j].text="Switch #" + j + " - " + nicks[j].value;
+		}
+	}
+	FixLeadingZeros();
+}
+
+function FixLeadingZeros()
+{
+	var a=[...$("input[type='number'][name='schMinute']"), ...$("input[type='number'][name='schHour']")];
+	for (var i=0;i<a.length;i++)
+	{
+		if(!isNaN(a[i].value)&&a[i].value.length === 1)
+		{
+			a[i].value = '0'+a[i].value;
+		}
+	}
+}
+
+function leadingZeros(input) 
+{
+	if(!isNaN(input.value) && input.value.toString().length === 1) 
+	{
+		input.value = '0' + input.value.toString();
+	}
+}
+
 function addSchedule(event) {
 
     var numSchedules = $("#schedules > div").length;
@@ -945,8 +922,7 @@ function addSchedule(event) {
         .next().prop("for", "schEnabled" + (numSchedules + 1));
     line.appendTo("#schedules");
     $(line).find("input[type='checkbox']").prop("checked", false);
-
-    return line;
+	return line;
 
 }
 
@@ -955,7 +931,8 @@ function addSchedule(event) {
 // -----------------------------------------------------------------------------
 
 function initRelays(data) {
-
+	var forms = $(".form-settings");
+	var nicknames = $("input[name='relayNickname']", forms);
     var current = $("#relays > div").length;
     if (current > 0) { return; }
 
@@ -964,7 +941,9 @@ function initRelays(data) {
 
         // Add relay fields
         var line = $(template).clone();
+		//var nickname = $("input[name='relayNickname']", forms)[i].value;
         $(".id", line).html(i);
+		$(".nickname", line).html(" - " + nicknames[i].value);
         $(":checkbox", line).prop('checked', data[i]).attr("data", i)
             .prop("id", "relay" + i)
             .on("change", function (event) {
@@ -1013,35 +992,19 @@ function initRelayConfig(data) {
         $("select[name='relayBoot']", line).val(data.boot[i]);
         $("select[name='relayPulse']", line).val(data.pulse[i]);
         $("input[name='relayTime']", line).val(data.pulse_time[i]);
+		$("input[name='relayNickname']", line).val(data.nickname[i]);
 
         if ("group" in data) {
             $("input[name='mqttGroup']", line).val(data.group[i]);
         }
         if ("group_sync" in data) {
-            $("select[name='mqttGroupSync']", line).val(data.group_sync[i]);
+            $("input[name='mqttGroupSync']", line).val(data.group_sync[i]);
         }
         if ("on_disc" in data) {
-            $("select[name='relayOnDisc']", line).val(data.on_disc[i]);
+            $("input[name='relayOnDisc']", line).val(data.on_disc[i]);
         }
 
         line.appendTo("#relayConfig");
-    }
-
-}
-
-function initLeds(data) {
-
-    var current = $("#ledConfig > div").length;
-    if (current > 0) { return; }
-
-    var size = data.length;
-    var template = $("#ledConfigTemplate").children();
-    for (var i=0; i<size; ++i) {
-        var line = $(template).clone();
-        $("span.id", line).html(i);
-        $("select", line).attr("data", i);
-        $("input", line).attr("data", i);
-        line.appendTo("#ledConfig");
     }
 
 }
@@ -1236,48 +1199,6 @@ function addRfbNode() {
 <!-- endRemoveIf(!rfbridge)-->
 
 // -----------------------------------------------------------------------------
-// LightFox
-// -----------------------------------------------------------------------------
-
-<!-- removeIf(!lightfox)-->
-
-function lightfoxLearn() {
-    sendAction("lightfoxLearn", {});
-}
-
-function lightfoxClear() {
-    sendAction("lightfoxClear", {});
-}
-
-function initLightfox(data, relayCount) {
-
-    var numNodes = data.length;
-
-    var template = $("#lightfoxNodeTemplate").children();
-
-    var i, j;
-    for (i=0; i<numNodes; i++) {
-        var $line = $(template).clone();
-        $line.find("label > span").text(data[i]["id"]);
-        $line.find("select").each(function() {
-            $(this).attr("name", "btnRelay" + data[i]["id"]);
-            for (j=0; j < relayCount; j++) {
-                $(this).append($("<option >").attr("value", j).text("Switch #" + j));
-            }
-            $(this).val(data[i]["relay"]);
-            status = !status;
-        });
-        $line.appendTo("#lightfoxNodes");
-    }
-
-    var $panel = $("#panel-lightfox")
-    $(".button-lightfox-learn").off("click").click(lightfoxLearn);
-    $(".button-lightfox-clear").off("click").click(lightfoxClear);
-
-}
-<!-- endRemoveIf(!lightfox)-->
-
-// -----------------------------------------------------------------------------
 // Processing
 // -----------------------------------------------------------------------------
 
@@ -1331,6 +1252,10 @@ function processData(data) {
             return;
         }
 
+        if ("rfbrawVisible" === key) {
+            $("input[name='rfbcode']").attr("maxlength", 116);
+        }
+
         if ("rfb" === key) {
             var rfb = data.rfb;
 
@@ -1345,19 +1270,6 @@ function processData(data) {
                 if (processOff) $("input[name='rfbcode'][data-id='" + (i + start) + "'][data-status='0']").val(rfb.off[i]);
             }
 
-            return;
-        }
-
-        <!-- endRemoveIf(!rfbridge)-->
-
-        // ---------------------------------------------------------------------
-        // LightFox
-        // ---------------------------------------------------------------------
-
-        <!-- removeIf(!lightfox)-->
-
-        if ("lightfoxButtons" === key) {
-            initLightfox(data["lightfoxButtons"], data["lightfoxRelayCount"]);
             return;
         }
 
@@ -1566,19 +1478,6 @@ function processData(data) {
         }
 
         // ---------------------------------------------------------------------
-        // LEDs
-        // ---------------------------------------------------------------------
-
-        if ("ledConfig" === key) {
-            initLeds(value);
-            for (var i=0; i<value.length; ++i) {
-                $("select[name='ledMode'][data='" + i + "']").val(value[i].mode);
-                $("input[name='ledRelay'][data='" + i + "']").val(value[i].relay);
-            }
-            return;
-        }
-
-        // ---------------------------------------------------------------------
         // Domoticz
         // ---------------------------------------------------------------------
 
@@ -1676,11 +1575,6 @@ function processData(data) {
             var days    = uptime;
             value = days + "d " + zeroPad(hours, 2) + "h " + zeroPad(minutes, 2) + "m " + zeroPad(seconds, 2) + "s";
         }
-        <!-- removeIf(!thermostat)-->
-        if ("tmpUnits" == key) {
-            $("span.tmpUnit").html(data[key] == 1 ? "ºF" : "ºC");
-        }
-        <!-- endRemoveIf(!thermostat)-->
 
         // ---------------------------------------------------------------------
         // Matching
@@ -1855,10 +1749,6 @@ $(function() {
     $("#uploader").on("change", onFileUpload);
     $(".button-upgrade").on("click", doUpgrade);
 
-    <!-- removeIf(!thermostat)-->
-    $(".button-thermostat-reset-counters").on('click', doResetThermostatCounters);
-    <!-- endRemoveIf(!thermostat)-->
-
     $(".button-apikey").on("click", generateAPIKey);
     $(".button-upgrade-browse").on("click", function() {
         $("input[name='upgrade']")[0].click();
@@ -1891,15 +1781,11 @@ $(function() {
     }
     <!-- endRemoveIf(!rfm69)-->
 
-    $(".gpio-select").each(function(_, elem) {
-        initSelectGPIO(elem)
-    });
-
     $(document).on("change", "input", hasChanged);
     $(document).on("change", "select", hasChanged);
 
     $("textarea").on("dblclick", function() { this.select(); });
-
+	
     // don't autoconnect when opening from filesystem
     if (window.location.protocol === "file:") { return; }
 
@@ -1909,5 +1795,5 @@ $(function() {
     } else {
         connectToCurrentURL();
     }
-
+	
 });

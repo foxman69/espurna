@@ -27,10 +27,6 @@ Copyright (C) 2016-2019 by Xose Pérez <xose dot perez at gmail dot com>
     #include "static/index.rfbridge.html.gz.h"
 #elif WEBUI_IMAGE == WEBUI_IMAGE_RFM69
     #include "static/index.rfm69.html.gz.h"
-#elif WEBUI_IMAGE == WEBUI_IMAGE_LIGHTFOX
-    #include "static/index.lightfox.html.gz.h"
-#elif WEBUI_IMAGE == WEBUI_IMAGE_THERMOSTAT
-    #include "static/index.thermostat.html.gz.h"
 #elif WEBUI_IMAGE == WEBUI_IMAGE_FULL
     #include "static/index.all.html.gz.h"
 #endif
@@ -336,32 +332,7 @@ void _onUpgradeData(AsyncWebServerRequest *request, String filename, size_t inde
     }
 }
 
-bool _onAPModeRequest(AsyncWebServerRequest *request) {
-
-    if ((WiFi.getMode() & WIFI_AP) > 0) {
-        const String domain = getSetting("hostname") + ".";
-        const String host = request->header("Host");
-        const String ip = WiFi.softAPIP().toString();
-
-        // Only allow requests that use our hostname or ip
-        if (host.equals(ip)) return true;
-        if (host.startsWith(domain)) return true;
-
-        // Immediatly close the connection, ref: https://github.com/xoseperez/espurna/issues/1660
-        // Not doing so will cause memory exhaustion, because the connection will linger
-        request->send(404);
-        request->client()->close();
-
-        return false;
-    }
-
-    return true;
-
-}
-
 void _onRequest(AsyncWebServerRequest *request){
-
-    if (!_onAPModeRequest(request)) return;
 
     // Send request to subscribers
     for (unsigned char i = 0; i < _web_request_callbacks.size(); i++) {
@@ -369,28 +340,18 @@ void _onRequest(AsyncWebServerRequest *request){
         if (response) return;
     }
 
-    // No subscriber handled the request, return a 404 with implicit "Connection: close"
+    // No subscriber handled the request, return a 404
     request->send(404);
-
-    // And immediatly close the connection, ref: https://github.com/xoseperez/espurna/issues/1660
-    // Not doing so will cause memory exhaustion, because the connection will linger
-    request->client()->close();
 
 }
 
 void _onBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-
-    if (!_onAPModeRequest(request)) return;
 
     // Send request to subscribers
     for (unsigned char i = 0; i < _web_body_callbacks.size(); i++) {
         bool response = (_web_body_callbacks[i])(request, data, len, index, total);
         if (response) return;
     }
-
-    // Same as _onAPModeRequest(...)
-    request->send(404);
-    request->client()->close();
 
 }
 
@@ -399,10 +360,13 @@ void _onBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t i
 
 bool webAuthenticate(AsyncWebServerRequest *request) {
     #if USE_PASSWORD
+		String username = getAdminUser();
         String password = getAdminPass();
         char httpPassword[password.length() + 1];
+		char httpUsername[username.length() + 1];
         password.toCharArray(httpPassword, password.length() + 1);
-        return request->authenticate(WEB_USERNAME, httpPassword);
+		username.toCharArray(httpUsername, username.length() + 1);
+        return request->authenticate(httpUsername, httpPassword);
     #else
         return true;
     #endif

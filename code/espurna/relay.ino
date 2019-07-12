@@ -33,6 +33,7 @@ typedef struct {
     unsigned long change_time;  // Scheduled time to change
     bool report;                // Whether to report to own topic
     bool group_report;          // Whether to report to group topic
+	  String nickname;			// nickname for each relay
 
     // Helping objects
 
@@ -196,11 +197,11 @@ void _relayProcess(bool mode) {
 
             relayPulse(id);
 
-            // We will trigger a eeprom save only if
+            // We will trigger a commit only if
             // we care about current relay status on boot
             unsigned char boot_mode = getSetting("relayBoot", id, RELAY_BOOT_MODE).toInt();
-            bool save_eeprom = ((RELAY_BOOT_SAME == boot_mode) || (RELAY_BOOT_TOGGLE == boot_mode));
-            _relaySaveTicker.once_ms(RELAY_SAVE_DELAY, relaySave, save_eeprom);
+            bool do_commit = ((RELAY_BOOT_SAME == boot_mode) || (RELAY_BOOT_TOGGLE == boot_mode));
+            _relaySaveTicker.once_ms(RELAY_SAVE_DELAY, relaySave, do_commit);
 
             #if WEB_SUPPORT
                 wsSend(_relayWebSocketUpdate);
@@ -246,14 +247,6 @@ void setSpeed(unsigned char speed) {
 // -----------------------------------------------------------------------------
 // RELAY
 // -----------------------------------------------------------------------------
-
-void _relayMaskRtcmem(uint32_t mask) {
-    Rtcmem->relay = mask;
-}
-
-uint32_t _relayMaskRtcmem() {
-    return Rtcmem->relay;
-}
 
 void relayPulse(unsigned char id) {
 
@@ -347,7 +340,7 @@ bool relayStatus(unsigned char id, bool status, bool report, bool group_report) 
 }
 
 bool relayStatus(unsigned char id, bool status) {
-    return relayStatus(id, status, mqttForward(), true);
+    return relayStatus(id, status, true, true);
 }
 
 bool relayStatus(unsigned char id) {
@@ -380,14 +373,6 @@ void relaySync(unsigned char id) {
             if (i != id) relayStatus(i, status);
         }
 
-    // If RELAY_SYNC_FIRST all relays should have the same state as first if first changes
-    } else if (relaySync == RELAY_SYNC_FIRST) {
-        if (id == 0) {
-            for (unsigned short i=1; i<_relays.size(); i++) {
-                relayStatus(i, status);
-            }
-        }
-
     // If NONE_OR_ONE or ONE and setting ON we should set OFF all the others
     } else if (status) {
         if (relaySync != RELAY_SYNC_ANY) {
@@ -409,41 +394,41 @@ void relaySync(unsigned char id) {
 
 }
 
-void relaySave(bool eeprom) {
+void relaySave(bool do_commit) {
 
-    auto mask = std::bitset<RELAY_SAVE_MASK_MAX>(0);
-
-    unsigned char count = relayCount();
-    if (count > RELAY_SAVE_MASK_MAX) count = RELAY_SAVE_MASK_MAX;
-
-    for (unsigned int i=0; i < count; ++i) {
-        mask.set(i, relayStatus(i));
+    // Relay status is stored in a single byte
+    // This means that, atm,
+    // we are only storing the status of the first 8 relays.
+    unsigned char bit = 1;
+    unsigned char mask = 0;
+    unsigned char count = _relays.size();
+    if (count > 8) count = 8;
+    for (unsigned int i=0; i < count; i++) {
+        if (relayStatus(i)) mask += bit;
+        bit += bit;
     }
 
-    const uint32_t mask_value = mask.to_ulong();
+    EEPROMr.write(EEPROM_RELAY_STATUS, mask);
+    DEBUG_MSG_P(PSTR("[RELAY] Setting relay mask: %d\n"), mask);
 
-    DEBUG_MSG_P(PSTR("[RELAY] Setting relay mask: %u\n"), mask_value);
-
-    // Persist only to rtcmem, unless requested to save to the eeprom
-    _relayMaskRtcmem(mask_value);
-
-    // The 'eeprom' flag controls wether we are commiting this change or not.
+    // The 'do_commit' flag controls wether we are commiting this change or not.
     // It is useful to set it to 'false' if the relay change triggering the
     // save involves a relay whose boot mode is independent from current mode,
     // thus storing the last relay value is not absolutely necessary.
     // Nevertheless, we store the value in the EEPROM buffer so it will be written
     // on the next commit.
-    if (eeprom) {
-        EEPROMr.write(EEPROM_RELAY_STATUS, mask_value);
+    if (do_commit) {
+
         // We are actually enqueuing the commit so it will be
-        // executed on the main loop, in case this is called from a system context callback
+        // executed on the main loop, in case this is called from a callback
         eepromCommit();
+
     }
 
 }
 
 void relaySave() {
-    relaySave(false);
+    relaySave(true);
 }
 
 void relayToggle(unsigned char id, bool report, bool group_report) {
@@ -452,7 +437,7 @@ void relayToggle(unsigned char id, bool report, bool group_report) {
 }
 
 void relayToggle(unsigned char id) {
-    relayToggle(id, mqttForward(), true);
+    relayToggle(id, true, true);
 }
 
 unsigned char relayCount() {
@@ -502,42 +487,52 @@ void _relayBackwards() {
         delSetting("mqttGroupInv", i);
     }
 
+    byte relayMode = getSetting("relayMode", RELAY_BOOT_MODE).toInt();
+    byte relayPulseMode = getSetting("relayPulseMode", RELAY_PULSE_MODE).toInt();
+    float relayPulseTime = getSetting("relayPulseTime", RELAY_PULSE_TIME).toFloat();
+    if (relayPulseMode == RELAY_PULSE_NONE) relayPulseTime = 0;
+
+    for (unsigned int i=0; i<_relays.size(); i++) {
+        if (!hasSetting("relayBoot", i)) setSetting("relayBoot", i, relayMode);
+        if (!hasSetting("relayPulse", i)) setSetting("relayPulse", i, relayPulseMode);
+        if (!hasSetting("relayTime", i)) setSetting("relayTime", i, relayPulseTime);
+    }
+
+    delSetting("relayMode");
+    delSetting("relayPulseMode");
+    delSetting("relayPulseTime");
+
 }
 
 void _relayBoot() {
 
     _relayRecursive = true;
+
+    unsigned char bit = 1;
     bool trigger_save = false;
-    uint32_t stored_mask = 0;
 
-    if (rtcmemStatus()) {
-        stored_mask = _relayMaskRtcmem();
-    } else {
-        stored_mask = EEPROMr.read(EEPROM_RELAY_STATUS);
-    }
-
-    DEBUG_MSG_P(PSTR("[RELAY] Retrieving mask: %u\n"), stored_mask);
-
-    auto mask = std::bitset<RELAY_SAVE_MASK_MAX>(stored_mask);
+    // Get last statuses from EEPROM
+    unsigned char mask = EEPROMr.read(EEPROM_RELAY_STATUS);
+    DEBUG_MSG_P(PSTR("[RELAY] Retrieving mask: %d\n"), mask);
 
     // Walk the relays
     bool status;
-    for (unsigned char i=0; i<relayCount(); ++i) {
+    for (unsigned int i=0; i<_relays.size(); i++) {
 
         unsigned char boot_mode = getSetting("relayBoot", i, RELAY_BOOT_MODE).toInt();
-        DEBUG_MSG_P(PSTR("[RELAY] Relay #%u boot mode %u\n"), i, boot_mode);
+        DEBUG_MSG_P(PSTR("[RELAY] Relay #%d boot mode %d\n"), i, boot_mode);
 
         status = false;
         switch (boot_mode) {
             case RELAY_BOOT_SAME:
                 if (i < 8) {
-                    status = mask.test(i);
+                    status = ((mask & bit) == bit);
                 }
                 break;
             case RELAY_BOOT_TOGGLE:
                 if (i < 8) {
-                    status = !mask[i];
-                    mask.flip(i);
+                    status = ((mask & bit) != bit);
+                    mask ^= bit;
                     trigger_save = true;
                 }
                 break;
@@ -556,13 +551,12 @@ void _relayBoot() {
         #else
             _relays[i].change_time = millis();
         #endif
+        bit <<= 1;
     }
 
     // Save if there is any relay in the RELAY_BOOT_TOGGLE mode
     if (trigger_save) {
-        _relayMaskRtcmem(mask.to_ulong());
-
-        EEPROMr.write(EEPROM_RELAY_STATUS, mask.to_ulong());
+        EEPROMr.write(EEPROM_RELAY_STATUS, mask);
         eepromCommit();
     }
 
@@ -585,6 +579,7 @@ void _relayConfigure() {
             //set to high to block short opening of relay
             digitalWrite(_relays[i].pin, HIGH);
         }
+		_relays[i].nickname = getSetting("relayNickname", i, "");
     }
 }
 
@@ -634,6 +629,10 @@ String _relayFriendlyName(unsigned char i) {
     return res;
 }
 
+String _relayNickname(unsigned char i) {
+    return _relays[i].nickname;
+}
+
 void _relayWebSocketSendRelays() {
     DynamicJsonBuffer jsonBuffer;
     JsonObject& root = jsonBuffer.createObject();
@@ -648,6 +647,7 @@ void _relayWebSocketSendRelays() {
     JsonArray& boot = relays.createNestedArray("boot");
     JsonArray& pulse = relays.createNestedArray("pulse");
     JsonArray& pulse_time = relays.createNestedArray("pulse_time");
+	  JsonArray& nickname = relays.createNestedArray("nickname");
 
     #if MQTT_SUPPORT
         JsonArray& group = relays.createNestedArray("group");
@@ -664,7 +664,8 @@ void _relayWebSocketSendRelays() {
 
         pulse.add(_relays[i].pulse);
         pulse_time.add(_relays[i].pulse_ms / 1000.0);
-
+		    nickname.add(_relayNickname(i));
+		
         #if MQTT_SUPPORT
             group.add(getSetting("mqttGroup", i, ""));
             group_sync.add(getSetting("mqttGroupSync", i, 0).toInt());
